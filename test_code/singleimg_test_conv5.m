@@ -1,10 +1,12 @@
-function main_test_rpn3()
+function singleimg_test_conv5()
 
 clear
 clc
 
-addpath('../assistfunc');
-addpath('../export_fig');
+% use fullfile to flexibly adapt to linux and windows path conventions
+addpath(fullfile('..','assistfunc'));
+addpath(fullfile('..', 'export_fig'));
+addpath(fullfile('..', 'code'));
 %addpath('nms');
 
 run(fullfile(fileparts(mfilename('fullpath')), ...
@@ -12,17 +14,17 @@ run(fullfile(fileparts(mfilename('fullpath')), ...
 
 %load('res_0917/new-net-epoch-30.mat');  %net
 %load('res_0918/net-epoch-7.mat');  %net
-load('../train_results/res_0922_conv4/net-epoch-6.mat');  %net
-
+load(fullfile('..','train_results','puck_conv5','net-epoch-30.mat'));  %net
+save_suffix = 'puck_conv5_ep30'; % change it according to above
 %box configuration
 opts.per_nms_topN           = 300;
 opts.nms_overlap_thres      = 0.7;
 opts.after_nms_topN         = 50;
 opts.use_gpu                = false;
 
-conf = load('../data_conv4/output_map_conv4.mat');
+conf = load(fullfile('..','data_conv5','output_map.mat'));
 conf.anchor_num = 7;  % can change any time
-conf.feat_stride = 8; %16-->8
+conf.feat_stride = 16; %
 %conf.anchors = proposal_generate_anchors('test_anchors.mat', 'ratios', [1], 'scales', 2.^[1:5]);
 conf.anchors = proposal_generate_anchors('test_anchor', 'ratios', [1], 'scales', 2.^[-1:5]); %anchor6
 
@@ -34,30 +36,22 @@ net.removeLayer('accuracy');
 net.removeLayer('loss_cls');
 
 % to correct bbox regression parameters
-load('../data_conv4/bbox_stat_conv4.mat'); %bbox_means, bbox_stds
+load(fullfile('..','data_conv5','bbox_stat.mat')); %bbox_means, bbox_stds
 anchor_size = size(conf.anchors, 1);
 bbox_stds_flatten = repmat(reshape(bbox_stds', [], 1), anchor_size, 1);
 bbox_means_flatten = repmat(reshape(bbox_means', [], 1), anchor_size, 1);
 
-weights = net.params(25).value;
-biase = net.params(26).value;
+weights = net.params(31).value;
+biase = net.params(32).value;
 
 weights = ...
     bsxfun(@times, weights, permute(bbox_stds_flatten, [2, 3, 4, 1])); % weights = weights * stds; 
 biase = ...
     biase .* bbox_stds_flatten + bbox_means_flatten; % bias = bias * stds + means;
 
-net.params(25).value = weights;
-net.params(26).value = biase;
-% for i = 1:2:32
-%    net.params(i).value = permute(net.params(i).value, [2,1,3,4]); 
-% end
-% net.vars(42) = []; % delete loss_bbox layer
-% net.vars(39) = []; % delete loss_bbox layer
-% net.vars(38) = []; % delete loss_bbox layer
-% net.layers(end) = []; % delete loss_bbox layer
-% net.layers(end) = []; % delete accuracy layer
-% net.layers(end) = []; % delete loss_cls layer
+net.params(31).value = weights;
+net.params(32).value = biase;
+
 % -------------------------------------------------------------------------
 % use the model to classify an image
 % -------------------------------------------------------------------------
@@ -77,13 +71,17 @@ if numGpus >= 1
   net.move('gpu');
 end
 
-
-ims = dir('../test_image/*.jpg');  %*/ delete the 77th image
+test_img_dir = fullfile('..', 'test_image');
+test_res_dir = fullfile('..', 'test_result');
+if ~exist(test_res_dir, 'dir')
+   mkdir(test_res_dir); 
+end
+ims = dir(fullfile(test_img_dir, '*.jpg'));  %*/ delete the 77th image
 for i = 1:numel(ims)
     fprintf('********** Processing image: %d/%d *********\n', i, length(ims));
     tic
     imname = ims(i).name;
-    img = single(imread(['../test_image/' imname]));
+    img = single(imread(fullfile(test_img_dir, imname)));
 
     [hei, wid, ~] = size(img);
     %7 x N x 4
@@ -161,7 +159,7 @@ for i = 1:numel(ims)
 %         rectangle('Position', rect_anchor, 'LineWidth', 1, 'EdgeColor', [1 0 0]);
     end
     %saveName = sprintf('test_result/img_%d_score_0918_plus_anchor',i);
-    saveName = sprintf('../test_result/img_%d_0922_conv4',i);
+    saveName = fullfile(test_res_dir, sprintf('img_%d_%s',i,save_suffix));
     export_fig(saveName, '-png', '-a1', '-native');
     fprintf('image %d saved.\n', i);
 end

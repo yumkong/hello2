@@ -1,27 +1,30 @@
-function main_test_rpn2()
+function singleimg_test_conv4()
 
 clear
 clc
 
-addpath('assistfunc');
-addpath('export_fig');
+% use fullfile to flexibly adapt to linux and windows path conventions
+addpath(fullfile('..','assistfunc'));
+addpath(fullfile('..', 'export_fig'));
+addpath(fullfile('..', 'code'));
 %addpath('nms');
 
 run(fullfile(fileparts(mfilename('fullpath')), ...
-  '..', '..', 'matlab', 'vl_setupnn.m')) ;
+  '..','..', '..', 'matlab', 'vl_setupnn.m')) ;
 
-load('res_0921/net-epoch-30.mat');  %net
-%load('res_anchor6/net-epoch-5.mat');  %net
-
+%load('res_0917/new-net-epoch-30.mat');  %net
+%load('res_0918/net-epoch-7.mat');  %net
+load(fullfile('..','train_results','puck_conv4','net-epoch-30.mat'));  %net
+save_suffix = 'puck_conv4_ep30'; % change it according to above
 %box configuration
 opts.per_nms_topN           = 300;
 opts.nms_overlap_thres      = 0.7;
 opts.after_nms_topN         = 50;
 opts.use_gpu                = false;
 
-conf = load('output_map.mat');
+conf = load(fullfile('..','data_conv4','output_map_conv4.mat'));
 conf.anchor_num = 7;  % can change any time
-conf.feat_stride = 16; %
+conf.feat_stride = 8; %16-->8
 %conf.anchors = proposal_generate_anchors('test_anchors.mat', 'ratios', [1], 'scales', 2.^[1:5]);
 conf.anchors = proposal_generate_anchors('test_anchor', 'ratios', [1], 'scales', 2.^[-1:5]); %anchor6
 
@@ -33,41 +36,52 @@ net.removeLayer('accuracy');
 net.removeLayer('loss_cls');
 
 % to correct bbox regression parameters
-load('data/bbox_stat.mat'); %bbox_means, bbox_stds
+load(fullfile('..','data_conv4','bbox_stat_conv4.mat')); %bbox_means, bbox_stds
 anchor_size = size(conf.anchors, 1);
 bbox_stds_flatten = repmat(reshape(bbox_stds', [], 1), anchor_size, 1);
 bbox_means_flatten = repmat(reshape(bbox_means', [], 1), anchor_size, 1);
 
-weights = net.params(31).value;
-biase = net.params(32).value;
+weights = net.params(25).value;
+biase = net.params(26).value;
 
 weights = ...
     bsxfun(@times, weights, permute(bbox_stds_flatten, [2, 3, 4, 1])); % weights = weights * stds; 
 biase = ...
     biase .* bbox_stds_flatten + bbox_means_flatten; % bias = bias * stds + means;
 
-net.params(31).value = weights;
-net.params(32).value = biase;
-% for i = 1:2:32
-%    net.params(i).value = permute(net.params(i).value, [2,1,3,4]); 
-% end
-% net.vars(42) = []; % delete loss_bbox layer
-% net.vars(39) = []; % delete loss_bbox layer
-% net.vars(38) = []; % delete loss_bbox layer
-% net.layers(end) = []; % delete loss_bbox layer
-% net.layers(end) = []; % delete accuracy layer
-% net.layers(end) = []; % delete loss_cls layer
+net.params(25).value = weights;
+net.params(26).value = biase;
+
 % -------------------------------------------------------------------------
 % use the model to classify an image
 % -------------------------------------------------------------------------
 meanface = net.meta.normalization.averageImage;
 
-ims = dir('test_image/*.jpg');  %*/ delete the 77th image
+%20160510 added, gpu switch
+use_gpu = true;
+
+if use_gpu
+    gpuID = [1];
+else
+    gpuID = [];
+end 
+
+numGpus = numel(gpuID) ;
+if numGpus >= 1
+  net.move('gpu');
+end
+
+test_img_dir = fullfile('..', 'test_image');
+test_res_dir = fullfile('..', 'test_result');
+if ~exist(test_res_dir, 'dir')
+   mkdir(test_res_dir); 
+end
+ims = dir(fullfile(test_img_dir, '*.jpg'));  %*/ delete the 77th image
 for i = 1:numel(ims)
     fprintf('********** Processing image: %d/%d *********\n', i, length(ims));
     tic
     imname = ims(i).name;
-    img = single(imread(['test_image/' imname]));
+    img = single(imread(fullfile(test_img_dir, imname)));
 
     [hei, wid, ~] = size(img);
     %7 x N x 4
@@ -76,18 +90,23 @@ for i = 1:numel(ims)
     imPatches = bsxfun(@minus, img, single(meanface));
     imPatches = imPatches(:,:,[3,2,1],:);
     imPatches = permute(imPatches, [2,1,3]);
-
+    if numGpus >= 1
+        imPatches = gpuArray(imPatches);
+    end
     %start detection
     tic
     net.conserveMemory = false;
     net.eval({'input', imPatches});
     fprintf('Processing 1 image costs %.3f seconds\n', toc);
     
-    box_deltas = net.vars(net.getVarIndex('proposal_bbox_pred')).value;
+    box_deltas = net.vars(net.getVarIndex('proposal_bbox_pred')).value;  % [w, h, 28]
+    if numGpus >= 1
+       box_deltas = gather(box_deltas); 
+    end
     %featuremap_size = [size(box_deltas, 2), size(box_deltas, 1)];
     % permute from [width, height, channel] to [channel, height, width], where channel is the
         % fastest dimension
-    box_deltas = permute(box_deltas, [3, 2, 1]);  % [3 1 2]
+    box_deltas = permute(box_deltas, [3, 2, 1]);
     box_deltas = reshape(box_deltas, 4, [])';
     
     anchors = calc_anchors([hei wid], conf);
@@ -98,16 +117,21 @@ for i = 1:numel(ims)
     
     % show the classification result
     scores = net.vars(net.getVarIndex('proposal_cls_score')).value;
-	scores = squeeze(gather(scores));
-    % h x (w x 7) x 2
+    % B = squeeze(A) returns an array B with the same elements as A but
+    %     with all the singleton dimensions removed
+    if numGpus >= 1
+       scores = gather(scores); 
+    end
+	scores = squeeze(scores);
+    % w x (h x 7) x 2
     scores = reshape(scores, size(scores,1), [], 2);
     E = exp(bsxfun(@minus, scores, max(scores,[],3))) ;
     L = sum(E, 3);
     scores = bsxfun(@rdivide, E, L);
     %[~, best] = max(scores,[],3);
     scores = scores(:,:,2);
-    scores = reshape(scores, size(scores,1), [], 7);
-    scores = permute(scores, [3, 2, 1]);  % [3,1,2]
+    scores = reshape(scores, size(scores,1), [], 7); % w x h x 7
+    scores = permute(scores, [3, 2, 1]); % 7 x h x w
     scores = scores(:);
     
     % drop too small boxes: less than 5 pixels
@@ -134,7 +158,8 @@ for i = 1:numel(ims)
 %         rect_anchor = [bbox_anchor(:, 1), bbox_anchor(:, 2), bbox_anchor(:, 3)-bbox_anchor(:,1)+1, bbox_anchor(:,4)-bbox_anchor(2)+1];
 %         rectangle('Position', rect_anchor, 'LineWidth', 1, 'EdgeColor', [1 0 0]);
     end
-    saveName = sprintf('test_result/img_%d_score_0.9_resize_0921',i);
+    %saveName = sprintf('test_result/img_%d_score_0918_plus_anchor',i);
+    saveName = fullfile(test_res_dir, sprintf('img_%d_%s',i,save_suffix));
     export_fig(saveName, '-png', '-a1', '-native');
     fprintf('image %d saved.\n', i);
 end
