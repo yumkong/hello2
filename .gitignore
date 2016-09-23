@@ -1,0 +1,5 @@
+*.mat
+train_results/*
+
+!bbox_stat*.mat
+!output_map*.mat
