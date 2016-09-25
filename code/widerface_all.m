@@ -4,7 +4,10 @@ function dataset = widerface_all(dataset, usage, use_flip)
 % or set opts.imdb_test opts.roidb_train
 
 % change to point to your devkit install
-devkit                      = '/usr/local/data/yuguang/dataset/wider_face';
+% in puck
+%devkit = '/usr/local/data/yuguang/dataset/wider_face';
+% in VN7_win
+devkit = 'D:\\datasets\\WIDERFACE';
 
 switch usage
     case {'train'}

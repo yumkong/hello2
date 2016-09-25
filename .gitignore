@@ -1,5 +1,12 @@
 *.mat
+*.jpg
+*.png
+*.mexw64
+*.mexa64
+
 train_results/*
 
+!test_image/*.jpg
+!hit_rate.mat
 !bbox_stat*.mat
 !output_map*.mat
